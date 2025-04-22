@@ -1,103 +1,245 @@
-import Image from "next/image";
+"use client";
+import { Answer, Chunk } from "@/types";
+import { useEffect, useState } from "react";
 
-export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+const SurveyPage = () => {
+  const [email, setEmail] = useState<string>("");
+  const [emailSubmitted, setEmailSubmitted] = useState<boolean>(false);
+  const [startTime, setStartTime] = useState<number>(Date.now());
+  const [chunks, setChunks] = useState<Chunk[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [answers, setAnswers] = useState<Answer[]>([]);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+  const [isDataSent, setIsDataSent] = useState(false);
+
+  useEffect(() => {
+    fetch("/books.csv")
+      .then((res) => res.text())
+      .then((text) => {
+        const lines = text.split("\n");
+        const headers = lines[0].split(",");
+        const data = lines.slice(1).map((line) => {
+          const values = line.split(",");
+          return values.reduce((acc, value, index) => {
+            acc[headers[index]] = value;
+            return acc;
+          }, {} as Record<string, string>);
+        });
+
+        const books = data.map((row) => {
+          return {
+            book_title: row.Title,
+            orignal_id: row.Original_ID,
+            generated_id: row.Generated_ID,
+          };
+        });
+
+        const originalIndexes = Array.from({ length: 10 }, () =>
+          Math.floor(Math.random() * books.length)
+        );
+        const generatedIndexes = Array.from({ length: 10 }, () =>
+          Math.floor(Math.random() * books.length)
+        );
+
+        const fetchOriginalChunks = originalIndexes.map(async (index) => {
+          const filepath = books[index].orignal_id;
+          try {
+            const res = await fetch(
+              `https://raw.githubusercontent.com/MilosAlex/thesis-survey-data/main/survey_chunks/${filepath}`
+            );
+            const fetchedText = await res.text();
+            return {
+              chunk_id: filepath,
+              source: "human",
+              book_title: books[index].book_title,
+              text: fetchedText,
+            };
+          } catch (err) {
+            console.error("Error fetching file:", err);
+            return null;
+          }
+        });
+
+        const fetchGeneratedChunks = generatedIndexes.map(async (index) => {
+          const filepath = books[index].generated_id;
+          try {
+            const res = await fetch(
+              `https://raw.githubusercontent.com/MilosAlex/thesis-survey-data/main/survey_chunks/${filepath}`
+            );
+            const fetchedText = await res.text();
+            return {
+              chunk_id: filepath,
+              source: "ai",
+              book_title: books[index].book_title,
+              text: fetchedText,
+            };
+          } catch (err) {
+            console.error("Error fetching file:", err);
+            return null;
+          }
+        });
+
+        Promise.all([...fetchOriginalChunks, ...fetchGeneratedChunks]).then(
+          (results) => {
+            const allChunks = results.filter(
+              (chunk): chunk is Chunk => chunk !== null
+            );
+
+            const shuffledChunks = allChunks.sort(() => Math.random() - 0.5);
+            setChunks(shuffledChunks);
+          }
+        );
+      });
+  }, []);
+
+  const sendAnswers = async (answers: Answer[]) => {
+    const response = await fetch("/api/answers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, answers }),
+    });
+    if (!response.ok) {
+      console.error("Error sending answers:", response.statusText);
+    } else {
+      setIsDataSent(true);
+    }
+  };
+
+  const handleAnswer = (guess: "human" | "ai") => {
+    const currentChunk = chunks[currentIndex];
+
+    const updatedAnswers = [
+      ...answers,
+      { ...currentChunk, user_guess: guess, time_ms: Date.now() - startTime },
+    ];
+
+    setAnswers(updatedAnswers);
+    setStartTime(Date.now());
+
+    const newIndex = currentIndex + 1;
+    setCurrentIndex(newIndex);
+
+    console.log(updatedAnswers);
+
+    if (newIndex >= chunks.length) {
+      sendAnswers(updatedAnswers);
+    }
+  };
+
+  const handleEmailSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (email.trim()) {
+      setEmailSubmitted(true);
+      setStartTime(Date.now());
+    }
+  };
+
+  if (!emailSubmitted) {
+    return (
+      <div className="max-w-md mx-auto p-4">
+        <h1 className="text-3xl text-center font-bold mb-4">
+          AI-generated or human-written?
+        </h1>
+        <p className="text-center mb-4">
+          First of all, Thank you for being here! You’re about to take part in a
+          survey where you’ll read 20 short book sections. Your task is simple:
+          decide whether each one was written by a human or generated by AI.
+        </p>
+        <h2 className="text-xl text-center font-bold mb-4">
+          Enter your email to start the survey
+        </h2>
+        <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="border p-2 rounded-xl"
+            required
+          />
+          <button
+            type="submit"
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            Start Survey
+          </button>
+          <p className="text-center mb-4">
+            I will email you the results of the survey once it is completed.
+            Your email will not be used for any other purpose.
+          </p>
+        </form>
+      </div>
+    );
+  }
+
+  const current = chunks[currentIndex];
+
+  if (currentIndex < chunks.length) {
+    return (
+      <div className="bg-white max-w-3xl mx-auto p-4 z-10">
+        <h1 className="text-xl text-center font-bold mb-4">
+          {currentIndex + 1} / {chunks.length}
+        </h1>
+        <article className="bg-white border p-4 rounded-xl mb-12 text-justify">
+          <p className="text-black">{current?.text ?? "No text available"}</p>
+        </article>
+        <div className="fixed bottom-[80px] left-0 right-0 flex justify-center gap-4">
+          <button
+            onClick={() => handleAnswer("human")}
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700"
           >
-            Read our docs
-          </a>
+            Written by someone
+          </button>
+          <button
+            onClick={() => handleAnswer("ai")}
+            className="bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700"
+          >
+            Generated with AI
+          </button>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </div>
+    );
+  }
+
+  const accuracy = answers.reduce(
+    (acc, answer) => acc + (answer.user_guess === answer.source ? 1 : 0),
+    0
+  );
+  const accuracyPercentage = Math.round((accuracy / answers.length) * 100);
+
+  return (
+    <div className="flex flex-col max-w-md mx-auto p-4">
+      <h1 className="text-3xl text-center font-bold mb-4">
+        {accuracyPercentage}% accuracy
+      </h1>
+      <h2 className="text-xl font-bold mb-4">
+        Thank you for completing the survey!
+      </h2>
+      {!isDataSent && (
+        <p className="mt-2">
+          Saving your responses... Please wait for a moment...
+        </p>
+      )}
+      {isDataSent && (
+        <>
+          <p className="text-green-500 mb-6">
+            Your data has been saved successfully!
+          </p>
+          <p className="text-center mb-2">
+            Still not tired? You can have another go:)
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl mb-4"
+          >
+            Take the survey again
+          </button>
+        </>
+      )}
     </div>
   );
-}
+};
+
+export default SurveyPage;
